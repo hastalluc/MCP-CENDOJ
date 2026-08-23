@@ -52,19 +52,39 @@ app.add_middleware(
 # se deniega todo acceso remoto por defecto (fail-closed) salvo /api/status,
 # para poder comprobar que el servicio está vivo sin exponer datos.
 #
-# El token se acepta de dos formas:
-#   - Cabecera "Authorization: Bearer <token>" (curl, pruebas, clientes MCP
-#     que sí permiten cabeceras personalizadas).
-#   - Query param "?token=<token>" en la URL — necesario porque el formulario
-#     de "conector personalizado" de claude.ai solo admite URL + OAuth
-#     client id/secret, sin campo para cabeceras propias (ver issue
-#     anthropics/claude-ai-mcp#112). Pegando
-#     "https://tu-servicio/mcp?token=..." directamente en ese campo basta.
-# Aviso: un token en la URL puede quedar registrado en logs de acceso del
-# proveedor de hosting o en el historial del navegador. Es el único método
-# que la UI de claude.ai admite hoy sin implementar OAuth completo; rota el
-# token si sospechas que se ha filtrado.
+# El token se acepta de varias formas, porque claude.ai tiene un mecanismo
+# oficial ("Request headers" / static_headers, en beta) para credenciales
+# fijas cuyo nombre de cabecera exacto no controlamos desde aquí:
+#   - "Authorization: Bearer <token>" (recomendado por Anthropic; usar este
+#     nombre de cabecera en el formulario de claude.ai).
+#   - "Authorization: <token>" (por si el campo no deja añadir el prefijo
+#     "Bearer ").
+#   - "X-API-Key: <token>" / "X-Auth-Token: <token>" (otros nombres del
+#     allowlist de cabeceras que admite claude.ai).
+#   - Query param "?token=<token>" — SOLO como último recurso. Anthropic
+#     desaconseja explícitamente credenciales en la URL (quedan en logs,
+#     proxies e historial; la spec de MCP lo prohíbe). Se mantiene aquí por
+#     compatibilidad, no como método recomendado.
+# Si CENDOJ_API_TOKEN no está definido, se deniega todo acceso remoto por
+# defecto (fail-closed) salvo /api/status.
 _API_TOKEN = os.getenv("CENDOJ_API_TOKEN")
+
+
+def _extract_candidate_tokens(request: Request) -> list[str]:
+    candidates = []
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        candidates.append(auth_header[len("Bearer "):])
+    elif auth_header:
+        candidates.append(auth_header)
+    for header_name in ("x-api-key", "x-auth-token"):
+        value = request.headers.get(header_name, "")
+        if value:
+            candidates.append(value)
+    query_token = request.query_params.get("token", "")
+    if query_token:
+        candidates.append(query_token)
+    return candidates
 
 @app.middleware("http")
 async def require_bearer_token(request: Request, call_next):
@@ -75,11 +95,8 @@ async def require_bearer_token(request: Request, call_next):
         logger.warning("CENDOJ_API_TOKEN no configurado: bloqueando acceso remoto por defecto.")
         return JSONResponse(status_code=503, content={"detail": "Servidor sin CENDOJ_API_TOKEN configurado."})
 
-    auth_header = request.headers.get("authorization", "")
-    header_token = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
-    query_token = request.query_params.get("token", "")
-
-    if not (secrets.compare_digest(header_token, _API_TOKEN) or secrets.compare_digest(query_token, _API_TOKEN)):
+    candidates = _extract_candidate_tokens(request)
+    if not any(secrets.compare_digest(c, _API_TOKEN) for c in candidates):
         return JSONResponse(status_code=401, content={"detail": "Token de autenticación inválido o ausente."})
 
     return await call_next(request)
