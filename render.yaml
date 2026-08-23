@@ -1,0 +1,21 @@
+# Blueprint de Render (gratuito) para el modo remoto (HTTP) de mcp-cendoj.
+# No afecta a la vía local por stdio (run.py mcp / install_mcp.py), que
+# sigue siendo el acceso de respaldo si esto falla o queda inaccesible.
+#
+# Uso: en el dashboard de Render, "New" -> "Blueprint", apuntando al fork
+# de este repo que contenga este archivo. Render crea el servicio y pide
+# confirmar el valor de CENDOJ_API_TOKEN (marcado sync: false = lo escribes
+# tú a mano, nunca queda en el repo).
+services:
+  - type: web
+    name: cendoj-mcp
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/status
+    envVars:
+      - key: CENDOJ_HEADLESS
+        value: "true"
+      - key: CENDOJ_API_TOKEN
+        sync: false

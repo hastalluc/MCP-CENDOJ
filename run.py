@@ -1,3 +1,4 @@
+import os
 import sys
 import logging
 import asyncio
@@ -21,10 +22,13 @@ def main():
     mode = sys.argv[1].lower()
 
     if mode == "api":
-        # Run FastAPI dev server with reload
-        print("Iniciando API REST y Servidor MCP (SSE) en http://localhost:8000...", file=sys.stderr)
-        print("Documentación interactiva disponible en: http://localhost:8000/docs", file=sys.stderr)
-        uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)
+        # Run FastAPI server. Render (y otros PaaS) inyectan el puerto real
+        # vía la variable de entorno PORT; en local sin esa variable se usa
+        # 8000 por defecto.
+        port = int(os.getenv("PORT", "8000"))
+        print(f"Iniciando API REST y Servidor MCP en http://localhost:{port}...", file=sys.stderr)
+        print(f"Documentación interactiva disponible en: http://localhost:{port}/docs", file=sys.stderr)
+        uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
         
     elif mode == "mcp":
         # Run stdio MCP server

@@ -1,0 +1,10 @@
+.venv/
+.git/
+.cache/
+downloads/
+exports/
+tests/
+.agents/
+__pycache__/
+*.pyc
+.env
