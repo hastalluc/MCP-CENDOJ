@@ -30,10 +30,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("cendoj_api")
 
+# El sub-app MCP se crea antes que la FastAPI padre porque su lifespan debe
+# pasarse al constructor de FastAPI. Sin esto, el StreamableHTTPSessionManager
+# de fastmcp nunca inicializa su task group y toda petición real a /mcp
+# (más allá del 401/redirect) revienta con 500 Internal Server Error.
+mcp_asgi_app = mcp.http_app()
+
 app = FastAPI(
     title="CENDOJ API & MCP Server",
     description="API REST y Servidor MCP para consultar resoluciones judiciales del CENDOJ",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=mcp_asgi_app.lifespan,
 )
 
 # Enable CORS for frontend integration
@@ -219,7 +226,9 @@ async def export_decision_markdown(
 # Mount MCP Server (Streamable HTTP transport) under /mcp.
 # fastmcp>=2 renombró/eliminó sse_app(); http_app() con transporte "http" es
 # el equivalente moderno (Streamable HTTP), que es lo que esperan los
-# conectores remotos actuales, incl. claude.ai.
+# conectores remotos actuales, incl. claude.ai. Se reutiliza la misma
+# instancia (mcp_asgi_app) creada arriba, cuyo lifespan ya está conectado
+# al de la app FastAPI padre.
 logger.info("Mounting MCP Streamable HTTP app under /mcp...")
-app.mount("/mcp", mcp.http_app(path="/"))
+app.mount("/", mcp_asgi_app)
 
