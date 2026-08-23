@@ -408,7 +408,7 @@ class CendojScraper:
         try:
             logger.info("Resolving real PDF URL from container page...")
             temp_page = await self.context.new_page()
-            await temp_page.goto(pdf_url, timeout=15000)
+            await temp_page.goto(pdf_url, timeout=25000)
             await temp_page.wait_for_load_state("networkidle")
             
             # Find direct PDF link or embedded object data attribute
@@ -470,7 +470,23 @@ class CendojScraper:
 
         if not pdf_bytes or len(pdf_bytes) < 100:
             raise Exception("El PDF descargado está vacío o no es válido.")
-            
+
+        # Validación de contenido: si la resolución del enlace real falló
+        # (p.ej. timeout de red cargando la página contenedora), este método
+        # puede terminar descargando la página HTML del contenedor en vez
+        # del PDF. Sin esta comprobación, esos bytes se devuelven como si
+        # fueran un PDF válido y se guardan silenciosamente con extensión
+        # .pdf, produciendo un archivo corrupto sin ningún aviso de error.
+        if not pdf_bytes.lstrip()[:5].startswith(b"%PDF-"):
+            preview = pdf_bytes[:80].decode("utf-8", errors="replace")
+            logger.error(f"Contenido descargado no es un PDF válido. Primeros bytes: {preview!r}")
+            raise Exception(
+                "El servidor no devolvió un PDF (probablemente un timeout de red "
+                "al resolver el enlace real del documento, o una página de error/"
+                "aviso de poderjudicial.es). Reintenta la descarga; si persiste, "
+                "puede ser un problema temporal del portal."
+            )
+
         return pdf_bytes
 
     async def download_pdf_text(self, pdf_url: str) -> str:
