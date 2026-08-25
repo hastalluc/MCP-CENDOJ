@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastmcp import FastMCP
 
 from app.scraper import CendojScraper
+from app.tc_scraper import TCScraper
 
 logger = logging.getLogger("cendoj_mcp")
 
@@ -208,4 +209,126 @@ async def exportar_resolucion_markdown(
     except Exception as e:
         logger.error(f"Error in exportar_resolucion_markdown: {e}", exc_info=True)
         return f"Error al exportar resolución a Markdown: {str(e)}"
+
+
+# ---------------------------------------------------------------------------
+# Tribunal Constitucional (Sistema HJ, hj.tribunalconstitucional.es)
+# ---------------------------------------------------------------------------
+
+@mcp.tool(
+    name="buscar_jurisprudencia_tc",
+    description="Busca resoluciones (sentencias, autos, declaraciones) del Tribunal Constitucional de España en el Sistema HJ."
+)
+async def buscar_jurisprudencia_tc(
+    query: Optional[str] = None,
+    tipo_resolucion: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    ecli: Optional[str] = None,
+    n_resolucion: Optional[str] = None,
+    anno_resolucion: Optional[str] = None,
+    ponente: Optional[str] = None,
+    n_recurso: Optional[str] = None,
+    anno_recurso: Optional[str] = None,
+    page: int = 1
+) -> str:
+    """
+    Busca jurisprudencia del Tribunal Constitucional con filtros detallados.
+
+    Args:
+        query: Texto libre para buscar en las resoluciones (opcional).
+        tipo_resolucion: 'Sentencia', 'Auto' o 'Declaracion' (opcional).
+        fecha_desde: Fecha de inicio del rango de búsqueda en formato YYYY-MM-DD o DD/MM/AAAA (opcional).
+        fecha_hasta: Fecha de fin del rango de búsqueda en formato YYYY-MM-DD o DD/MM/AAAA (opcional).
+        ecli: Identificador ECLI completo, formato 'ECLI:ES:TC:AAAA:NNNN' (opcional).
+        n_resolucion: Número de la resolución, p.ej. '47' (opcional).
+        anno_resolucion: Año de la resolución, p.ej. '2022' (opcional).
+        ponente: Nombre del magistrado ponente, texto tal como aparece en el desplegable del buscador (opcional).
+        n_recurso: Número de recurso (opcional).
+        anno_recurso: Año del recurso (opcional).
+        page: Número de página de resultados a recuperar (por defecto es 1).
+    """
+    logger.info(f"MCP Tool buscar_jurisprudencia_tc called with query='{query}', ecli='{ecli}', page={page}")
+    try:
+        async with TCScraper() as scraper:
+            response = await scraper.search(
+                query=query,
+                tipo_resolucion=tipo_resolucion,
+                fecha_desde=fecha_desde,
+                fecha_hasta=fecha_hasta,
+                ecli=ecli,
+                n_resolucion=n_resolucion,
+                anno_resolucion=anno_resolucion,
+                ponente=ponente,
+                n_recurso=n_recurso,
+                anno_recurso=anno_recurso,
+                page_num=page
+            )
+            return response.model_dump_json(indent=2)
+    except Exception as e:
+        logger.error(f"Error in buscar_jurisprudencia_tc: {e}", exc_info=True)
+        return f"Error al buscar jurisprudencia del Tribunal Constitucional: {str(e)}"
+
+
+@mcp.tool(
+    name="obtener_texto_resolucion_tc",
+    description="Obtiene el ECLI, título y texto íntegro de una resolución del Tribunal Constitucional a partir de su ID numérico (devuelto por buscar_jurisprudencia_tc)."
+)
+async def obtener_texto_resolucion_tc(resolution_id: str) -> str:
+    """
+    Devuelve el texto completo (ECLI, título, cuerpo) de una resolución del TC.
+
+    Args:
+        resolution_id: ID numérico de la resolución (campo 'id' devuelto por buscar_jurisprudencia_tc).
+    """
+    logger.info(f"MCP Tool obtener_texto_resolucion_tc called with id='{resolution_id}'")
+    try:
+        async with TCScraper() as scraper:
+            data = await scraper.get_resolution_text(resolution_id)
+            header = f"{data['titulo']}\nECLI: {data['ecli']}\nURL: {data['url']}\n\n"
+            return header + data["texto"]
+    except Exception as e:
+        logger.error(f"Error in obtener_texto_resolucion_tc: {e}", exc_info=True)
+        return f"Error al obtener el texto de la resolución del TC: {str(e)}"
+
+
+@mcp.tool(
+    name="descargar_pdf_resolucion_tc",
+    description="Descarga el PDF oficial de una resolución del Tribunal Constitucional y lo guarda en el espacio de trabajo local."
+)
+async def descargar_pdf_resolucion_tc(pdf_url: str, filename: Optional[str] = None) -> str:
+    """
+    Descarga y guarda localmente una resolución del TC en formato PDF.
+
+    Args:
+        pdf_url: URL directa del PDF (campo 'url_pdf' devuelto por buscar_jurisprudencia_tc, formato
+            https://hj.tribunalconstitucional.es/es/Resolucion/Api/{id}?format=pdf).
+        filename: Nombre de archivo opcional para guardarlo (por defecto se autogenerará un nombre único).
+    """
+    logger.info(f"MCP Tool descargar_pdf_resolucion_tc called with url='{pdf_url}' and filename='{filename}'")
+    try:
+        async with TCScraper() as scraper:
+            pdf_bytes = await scraper.download_pdf_bytes(pdf_url)
+
+            project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            downloads_dir = os.path.join(project_dir, "downloads")
+            os.makedirs(downloads_dir, exist_ok=True)
+
+            if not filename:
+                url_hash = hashlib.md5(pdf_url.encode('utf-8')).hexdigest()[:8]
+                filename = f"tc_resolucion_{url_hash}.pdf"
+
+            if not filename.endswith(".pdf"):
+                filename += ".pdf"
+
+            filename = "".join(c for c in filename if c.isalnum() or c in (".", "_", "-"))
+
+            dest_path = os.path.join(downloads_dir, filename)
+            with open(dest_path, "wb") as f:
+                f.write(pdf_bytes)
+
+            return f"PDF descargado y guardado correctamente en: {dest_path}"
+    except Exception as e:
+        logger.error(f"Error in descargar_pdf_resolucion_tc: {e}", exc_info=True)
+        return f"Error al descargar la resolución PDF del TC: {str(e)}"
 
