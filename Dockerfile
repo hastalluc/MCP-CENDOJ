@@ -12,6 +12,13 @@ RUN pip install --no-cache-dir --upgrade pip
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# El Node interno de las versiones recientes de Playwright necesita libatomic1,
+# que la imagen slim no trae (sin ella: "libatomic.so.1: cannot open shared
+# object file", exit code 127, al ejecutar playwright install).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Instala el navegador Chromium y sus librerías de sistema
 RUN playwright install --with-deps chromium
 

@@ -1,10 +1,14 @@
-fastapi>=0.100.0
-uvicorn>=0.22.0
-playwright>=1.35.0
-mcp>=1.0.1
-pypdf>=3.10.0
-python-dotenv>=1.0.0
-sse-starlette>=1.6.0
-httpx>=0.24.0
-pytest>=7.0.0
-fastmcp>=0.1.0
+# Versiones fijadas (2026-11-13) = las del entorno local donde se probó el código
+# (incl. la herramienta actualidad_ts). Sin fijar, Render instaló fastmcp 4.x y
+# mcp 2.x (saltos de versión mayor) y Playwright 1.65, y el build de Docker falló.
+# Para actualizar: probar en local con la versión nueva antes de cambiarla aquí.
+fastapi==0.141.1
+uvicorn==0.52.4
+playwright==1.62.0
+mcp==1.29.0
+pypdf==6.16.1
+python-dotenv==1.2.3
+sse-starlette==3.4.8
+httpx==0.28.1
+pytest==9.1.1
+fastmcp==3.4.7
