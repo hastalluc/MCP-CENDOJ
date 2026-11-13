@@ -300,7 +300,121 @@ class CendojScraper:
             total = titles_count
             logger.info(f"Could not parse total results string, using visible count: {total}")
 
-        # Parse result cards
+        results = await self._parse_cards()
+        return SearchResponse(total=total, results=results)
+
+    # Salas del Tribunal Supremo en el filtro «Actualidad» del CENDOJ:
+    # https://www.poderjudicial.es/search/DeActualidad/TS/<Sala>/
+    _SALAS_ACTUALIDAD = {
+        "civil": "Civil",
+        "penal": "Penal",
+        "contencioso": "Contencioso",
+        "contencioso-administrativo": "Contencioso",
+        "social": "Social",
+        "militar": "Militar",
+        "todas": "",
+        "todos": "",
+        "": "",
+    }
+    _ACTUALIDAD_MAX_PAGINAS = 6        # tope duro: no hacer barridos masivos
+    _ACTUALIDAD_PAUSA_S = 2.0          # pausa entre páginas (detector de descargas masivas)
+
+    async def actualidad_ts(
+        self,
+        sala: str = "todas",
+        desde: Optional[str] = None,
+        max_resultados: int = 20,
+    ) -> SearchResponse:
+        """Lista las resoluciones «de actualidad» del Tribunal Supremo.
+
+        Abre la lista del filtro Actualidad de la Sala indicada (o de todas),
+        pagina de 10 en 10 y devuelve hasta `max_resultados` con fecha >= `desde`,
+        ordenadas de más reciente a más antigua.
+        """
+        clave = (sala or "").strip().lower()
+        if clave not in self._SALAS_ACTUALIDAD:
+            raise ValueError(
+                f"Sala no válida: {sala!r}. Valores: Civil, Penal, Contencioso, Social, Militar o todas."
+            )
+        slug = self._SALAS_ACTUALIDAD[clave]
+        max_resultados = max(1, min(int(max_resultados), 10 * self._ACTUALIDAD_MAX_PAGINAS))
+
+        desde_iso = None
+        if desde:
+            d = self._format_date(desde)  # -> DD/MM/AAAA si venía en AAAA-MM-DD
+            m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", d or "")
+            if not m:
+                raise ValueError(f"Fecha 'desde' no válida: {desde!r}. Usa AAAA-MM-DD o DD/MM/AAAA.")
+            desde_iso = f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+
+        url = "https://www.poderjudicial.es/search/DeActualidad/TS/" + (f"{slug}/" if slug else "")
+        logger.info(f"Abriendo lista de actualidad del TS: {url}")
+        await self.page.goto(url)
+        await self.page.wait_for_load_state("networkidle")
+        await self._dismiss_modal()
+
+        selector = 'div#jurisprudenciaresults_searchresults a[id^="ref-"]'
+        try:
+            await self.page.wait_for_selector(selector, state="attached", timeout=25000)
+        except Exception:
+            body_text = await self.page.inner_text("body")
+            if "no se han encontrado resultados" in body_text.lower() or "sin resultados" in body_text.lower():
+                return SearchResponse(total=0, results=[])
+            raise
+
+        body_text = await self.page.inner_text("body")
+        total = 0
+        total_match = re.search(r"(\d[\d\.]*)\s+resultados", body_text, re.IGNORECASE)
+        if total_match:
+            total = int(total_match.group(1).replace(".", ""))
+
+        vistos = set()
+        recogidos: List[JurisprudenciaResult] = []
+        for pagina in range(1, self._ACTUALIDAD_MAX_PAGINAS + 1):
+            if pagina > 1:
+                await self.page.wait_for_timeout(int(self._ACTUALIDAD_PAUSA_S * 1000))
+                if total and (pagina - 1) * 10 >= total:
+                    break
+                primera_antes = await self.page.locator(selector).first.get_attribute("id")
+                # La barra de paginación del sitio (hay dos, una oculta) llama a esta función JS.
+                await self.page.evaluate(f"goToPage('jurisprudencia', {pagina})")
+                try:
+                    await self.page.wait_for_function(
+                        """(antes) => {
+                            const a = document.querySelector('div#jurisprudenciaresults_searchresults a[id^="ref-"]');
+                            return a && a.id !== antes;
+                        }""",
+                        arg=primera_antes,
+                        timeout=15000,
+                    )
+                except Exception:
+                    logger.warning(f"La página {pagina} no cambió el contenido; se detiene la paginación.")
+                    break
+
+            tarjetas = await self._parse_cards(prefer_actualidad=True)
+            utiles = 0
+            for r in tarjetas:
+                clave_r = r.ecli or r.roj or r.id
+                if clave_r in vistos:
+                    continue
+                vistos.add(clave_r)
+                if desde_iso and r.fecha and r.fecha < desde_iso:
+                    continue
+                recogidos.append(r)
+                utiles += 1
+            # La lista viene ordenada por fecha de resolución descendente: si la
+            # última de la página ya es anterior a `desde`, las siguientes también.
+            fechas = [r.fecha for r in tarjetas if r.fecha]
+            if desde_iso and fechas and min(fechas) < desde_iso:
+                break
+            if len(recogidos) >= max_resultados:
+                break
+
+        recogidos.sort(key=lambda r: r.fecha or "", reverse=True)
+        return SearchResponse(total=total, results=recogidos[:max_resultados])
+
+    async def _parse_cards(self, prefer_actualidad: bool = False) -> List[JurisprudenciaResult]:
+        """Analiza las tarjetas de resultados visibles en la página actual."""
         results = []
         cards_locator = self.page.locator('div#jurisprudenciaresults_searchresults div.searchresult')
         count = await cards_locator.count()
@@ -372,8 +486,13 @@ class CendojScraper:
                 
                 # Retrieve full summary from hidden div (prevents truncation!)
                 resumen = None
+                actualidad_el = card.locator('div[id^="summ-actualidad"]').first
+                if prefer_actualidad and await actualidad_el.count() > 0:
+                    resumen = (await actualidad_el.text_content() or "").strip() or None
                 hidden_summary_el = card.locator('div.hddnsummary').first
-                if await hidden_summary_el.count() > 0:
+                if resumen:
+                    pass
+                elif await hidden_summary_el.count() > 0:
                     resumen = await hidden_summary_el.inner_text()
                 else:
                     summary_el = card.locator('div.summary').first
@@ -404,8 +523,8 @@ class CendojScraper:
             except Exception as e:
                 logger.error(f"Error parsing item {i}: {e}", exc_info=True)
                 continue
+        return results
 
-        return SearchResponse(total=total, results=results)
 
     async def download_pdf_bytes(self, pdf_url: str) -> bytes:
         logger.info(f"Resolving real PDF URL from container: {pdf_url}")

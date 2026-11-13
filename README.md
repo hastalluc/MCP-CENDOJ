@@ -31,6 +31,7 @@ Dado que el CENDOJ no dispone de una API pública y protege sus búsquedas con J
     *   Soporte para modo **SSE (Server-Sent Events)** montado de forma nativa en FastAPI bajo el prefijo `/mcp` (para clientes remotos o web).
     *   Herramientas expuestas:
         *   `buscar_jurisprudencia`: Realiza búsquedas con todos los filtros detallados (query, roj, ecli, ponente, recurso, resolución, norma, etc.).
+        *   `actualidad_ts(sala, desde, max_resultados)`: Lista las resoluciones del Tribunal Supremo marcadas «de actualidad» (`/search/DeActualidad/TS/<Sala>/`). `sala`: Civil, Penal, Contencioso, Social, Militar o todas; `desde`: fecha mínima (AAAA-MM-DD o DD/MM/AAAA); `max_resultados`: hasta 60 (6 páginas de 10, con pausa de 2 s entre páginas). Devuelve ECLI, ROJ, fecha, ponente, recurso, resumen y enlace, de más reciente a más antigua. El texto completo se obtiene con `obtener_texto_resolucion`.
         *   `obtener_texto_resolucion`: Descarga un PDF y extrae su texto completo.
 *   **Compatibilidad con Windows:** Parcheado para evitar problemas con la política del bucle de eventos (`NotImplementedError` en subprocess) en entornos Windows.
 

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import hashlib
+import json
 from typing import List, Optional
 from fastmcp import FastMCP
 
@@ -96,6 +97,63 @@ async def buscar_jurisprudencia(
             return f"Error al buscar jurisprudencia en CENDOJ: {str(e)}"
 
     return await _with_timeout(_do(), _SEARCH_TIMEOUT_S, "buscar_jurisprudencia")
+
+@mcp.tool(
+    name="actualidad_ts",
+    description=(
+        "Lista las resoluciones del Tribunal Supremo marcadas «de actualidad» en el CENDOJ "
+        "(filtro Actualidad), por Sala y desde una fecha. Devuelve ECLI, ROJ, fecha, ponente, "
+        "recurso, resumen y enlace, ordenadas de más reciente a más antigua. El texto completo "
+        "se obtiene con obtener_texto_resolucion o exportar_resolucion_markdown."
+    )
+)
+async def actualidad_ts(
+    sala: str = "todas",
+    desde: Optional[str] = None,
+    max_resultados: int = 20
+) -> str:
+    """
+    Novedades («de actualidad») del Tribunal Supremo en el CENDOJ.
+
+    Args:
+        sala: 'Civil', 'Penal', 'Contencioso', 'Social', 'Militar' o 'todas' (por defecto 'todas').
+        desde: Fecha mínima de la resolución, AAAA-MM-DD o DD/MM/AAAA (opcional; sin ella, las más recientes).
+        max_resultados: Máximo de resoluciones a devolver (por defecto 20; tope 60, es decir, 6 páginas de 10).
+    """
+    logger.info(f"MCP Tool actualidad_ts called with sala='{sala}', desde='{desde}', max_resultados={max_resultados}")
+
+    async def _do():
+        try:
+            async with CendojScraper() as scraper:
+                response = await scraper.actualidad_ts(
+                    sala=sala, desde=desde, max_resultados=max_resultados
+                )
+            items = [
+                {
+                    "ecli": r.ecli,
+                    "roj": r.roj,
+                    "fecha": r.fecha,
+                    "ponente": r.ponente,
+                    "recurso": r.n_recurso,
+                    "n_resolucion": r.n_resolucion,
+                    "organo": r.organo,
+                    "resumen": r.resumen,
+                    "enlace": r.url_pdf,
+                }
+                for r in response.results
+            ]
+            return json.dumps(
+                {"sala": sala, "desde": desde, "total_en_lista": response.total,
+                 "devueltos": len(items), "resultados": items},
+                ensure_ascii=False, indent=2,
+            )
+        except ValueError as e:
+            return f"Parámetros no válidos para actualidad_ts: {e}"
+        except Exception as e:
+            logger.error(f"Error in actualidad_ts: {e}", exc_info=True)
+            return f"Error al consultar la actualidad del TS en CENDOJ: {str(e)}"
+
+    return await _with_timeout(_do(), _SEARCH_TIMEOUT_S, "actualidad_ts")
 
 @mcp.tool(
     name="obtener_texto_resolucion",
