@@ -103,41 +103,10 @@ async def require_bearer_token(request: Request, call_next):
         return JSONResponse(status_code=503, content={"detail": "Servidor sin CENDOJ_API_TOKEN configurado."})
 
     candidates = _extract_candidate_tokens(request)
-    if not any(secrets.compare_digest(c, _API_TOKEN) for c in candidates):
+    if not any(secrets.compare_digest(c.encode("utf-8"), _API_TOKEN.encode("utf-8")) for c in candidates):
         return JSONResponse(status_code=401, content={"detail": "Token de autenticación inválido o ausente."})
 
     return await call_next(request)
-
-# Diagnóstico temporal (2026-11-13): registra cada petición a /mcp con su estado
-# final y las cabeceras relevantes, para localizar un 400 de cuerpo vacío que solo
-# se da en Render. No registra valores de Authorization ni de token (solo si
-# existen). Se añade DESPUÉS de la autenticación, así que queda como capa
-# más externa y ve la respuesta definitiva. Retirar cuando se resuelva.
-_diag_logger = logging.getLogger("cendoj_mcp_diag")
-
-@app.middleware("http")
-async def diagnostico_mcp(request: Request, call_next):
-    if not request.url.path.startswith("/mcp"):
-        return await call_next(request)
-    h = request.headers
-    peticion = (
-        f"{request.method} {request.url.path} "
-        f"host={h.get('host')} xfp={h.get('x-forwarded-proto')} "
-        f"ctype={h.get('content-type')} clen={h.get('content-length')} "
-        f"accept={h.get('accept')} proto={h.get('mcp-protocol-version')} "
-        f"sesion={'si' if h.get('mcp-session-id') else 'no'} "
-        f"auth={'si' if h.get('authorization') else 'no'} "
-        f"token_query={'si' if request.query_params.get('token') else 'no'} "
-        f"ua={h.get('user-agent')} origin={h.get('origin')}"
-    )
-    try:
-        response = await call_next(request)
-    except Exception as e:
-        _diag_logger.error(f"[MCP-DIAG] EXCEPCION {peticion} -> {type(e).__name__}: {e}", exc_info=True)
-        raise
-    cabeceras = {k: v for k, v in response.headers.items() if k.lower() in ("content-type", "content-length", "mcp-session-id", "www-authenticate", "allow", "location")}
-    _diag_logger.info(f"[MCP-DIAG] {peticion} -> {response.status_code} {cabeceras}")
-    return response
 
 @app.get("/api/status", summary="Verificar estado del servicio")
 async def get_status():
